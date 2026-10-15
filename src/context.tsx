@@ -33,7 +33,7 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
   }, [userId])
   useEffect(() => {
     if (!authReady) return
-    ++generation.current; setData(empty); setLoading(Boolean(userId)); void refresh()
+    ++generation.current; setData(empty); setError(configError ?? ''); setLoading(Boolean(userId)); void refresh()
     if (!userId || configError) return
     const update = () => { void refresh() }
     const unsubscribe = subscribe(update, setConnected)

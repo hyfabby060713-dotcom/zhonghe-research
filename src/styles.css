@@ -365,6 +365,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px; border-radi
 .auth-card h1, .auth-card h2 { font-size: 23px; font-weight: 600; margin: 15px 0; }
 .auth-card>p { color: #8a9bac; font-size: 11px; line-height: 1.9; margin: 14px 0 23px; }
 .auth-card .form { margin-top: 28px; }
+.auth-tabs { display: flex; gap: 5px; background: #f1f5f9; padding: 5px; border-radius: 8px; }
+.auth-tabs button { flex: 1; padding: 10px; border-radius: 5px; background: transparent; color: #667c91; }
+.auth-tabs button[aria-pressed="true"] { background: #fff; color: #203c59; box-shadow: 0 1px 4px #20344e12; font-weight: 600; }
+.auth-card .auth-notice { background: #edf5f2; border: 1px solid #d4e6de; padding: 12px; border-radius: 7px; color: #315d4f; font-size: 12px; line-height: 1.8; }
+.auth-text-button { display: block; margin-top: 18px; background: transparent; color: #355c7d; font-size: 12px; padding: 5px 0; text-decoration: underline; text-underline-offset: 4px; }
+.auth-email { overflow-wrap: anywhere; }
+.auth-feedback { margin-top: 18px; line-height: 1.8; }
+.auth-card { max-width: 430px; }
 .field-error { color: #af7371; font-size: 11px; }
 .mobile-menu, .mobile-close, .sidebar-scrim { display: none; }
 

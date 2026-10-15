@@ -19,7 +19,7 @@ beforeAll(async () => {
   await db.exec(`
     create role anon; create role authenticated;
     create schema auth; create schema storage;
-    create table auth.users(id uuid primary key);
+    create table auth.users(id uuid primary key, email_confirmed_at timestamptz default now(), is_anonymous boolean default false);
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
     create table storage.buckets(id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
     create table storage.objects(id uuid primary key default gen_random_uuid(), bucket_id text, name text);
@@ -31,7 +31,7 @@ beforeAll(async () => {
   const schema = readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8')
   await db.exec(schema)
   await db.exec(schema) // idempotent initialization
-  await db.query('insert into auth.users values ($1),($2),($3),($4)', [userA, userB, outsider, colleague])
+  await db.query('insert into auth.users(id) values ($1),($2),($3),($4)', [userA, userB, outsider, colleague])
   await db.query("insert into public.teams(id,name) values ($1,'A组'),($2,'B组')", [teamA, teamB])
   await db.query("insert into public.team_members values ($1,$2,'甲'),($3,$4,'乙'),($1,$5,'同组成员')", [teamA, userA, teamB, userB, colleague])
   await asUser(userA, "insert into public.literature(id,team_id,title,authors,journal,year,created_by) values ($1,$2,'A组文献','甲','资料',2026,$3)", [litA, teamA, userA])
@@ -51,6 +51,73 @@ describe('数据库初始化与团队隔离', () => {
     await expect(asUser(userB, "insert into public.literature(team_id,title,authors,journal,year,created_by) values ($1,'越权','乙','资料',2026,$2)", [teamA, userB])).rejects.toThrow(/row-level security/)
     await expect(asUser(outsider, "insert into public.team_members values ($1,$2,'越权')", [teamA, outsider])).rejects.toThrow(/permission denied/)
     await expect(asUser(userA, "insert into public.activity_logs(team_id,action,entity_title) values ($1,'伪造','测试')", [teamA])).rejects.toThrow(/permission denied/)
+  })
+})
+
+describe('注册后的邀请码入组', () => {
+  const invitee = '40000000-0000-4000-8000-000000000001', second = '40000000-0000-4000-8000-000000000002'
+  const unverified = '40000000-0000-4000-8000-000000000003', limited = '40000000-0000-4000-8000-000000000004'
+  const join = (user: string, code: string, team = teamA, name = '新成员') => asUser<{ result: { joined: boolean; message?: string } }>(user,
+    'select public.join_team_with_invite($1,$2,$3) as result', [team, code, name])
+  async function issue(code: string, options: { expired?: boolean; revoked?: boolean; maxUses?: number } = {}) {
+    return db.query<{ id: string }>(`insert into research_private.team_invites(team_id,code_hash,expires_at,max_uses,revoked)
+      values ($1,encode(sha256(convert_to($2,'UTF8')),'hex'),now() + $3::interval,$4,$5) returning id`,
+    [teamA, code, options.expired ? '-1 day' : '1 day', options.maxUses ?? 1, options.revoked ?? false])
+  }
+  beforeAll(async () => {
+    const sql = readFileSync(new URL('../supabase/invitations.sql', import.meta.url), 'utf8')
+    await db.exec(sql); await db.exec(sql)
+    await db.query('insert into auth.users(id) values ($1),($2),($3),($4)', [invitee, second, unverified, limited])
+    await db.query('update auth.users set email_confirmed_at = null where id=$1', [unverified])
+  })
+  it('匿名角色不能兑换；邀请码和失败记录不能直接读写，账号本身不授予团队权限', async () => {
+    await expect(db.transaction(async tx => { await tx.exec('set local role anon'); await tx.exec("select public.join_team_with_invite(null,'x','x')") })).rejects.toThrow(/permission denied/)
+    await expect(asUser(invitee, 'select * from research_private.team_invites')).rejects.toThrow(/permission denied/)
+    await expect(asUser(invitee, 'delete from research_private.invite_attempts')).rejects.toThrow(/permission denied/)
+    expect((await asUser(invitee, 'select * from public.literature')).rows).toEqual([])
+    expect((await join(invitee, 'invalid')).rows[0].result.joined).toBe(false)
+  })
+  it('必须验证邮箱；匿名登录账号也不能兑换', async () => {
+    await issue('verified-only')
+    expect((await join(unverified, 'verified-only')).rows[0].result.message).toMatch(/邮箱验证/)
+    await db.query('update auth.users set email_confirmed_at=now(), is_anonymous=true where id=$1', [unverified])
+    expect((await join(unverified, 'verified-only')).rows[0].result.joined).toBe(false)
+  })
+  it('管理员脚本实际生成随机码，只保存摘要；公开包装函数没有提权权限', async () => {
+    const script = readFileSync(new URL('../supabase/create-invite.sql', import.meta.url), 'utf8').replace(/TEAM_UUID/g, teamA)
+    const result = await db.query<{ invite_id: string; invite_code: string }>(script)
+    const result2 = await db.query<{ invite_code: string }>(script)
+    expect(result.rows[0].invite_code).toMatch(/^[0-9a-f]{32}$/)
+    expect(result.rows[0].invite_code).not.toBe(result2.rows[0].invite_code)
+    const stored = await db.query<{ code_hash: string }>('select code_hash from research_private.team_invites where id=$1', [result.rows[0].invite_id])
+    expect(stored.rows[0].code_hash).toMatch(/^[0-9a-f]{64}$/)
+    const functions = await db.query<{ nspname: string; prosecdef: boolean; proconfig: string[] }>(`select n.nspname,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where p.proname in ('join_team_with_invite','redeem_invite') order by n.nspname`)
+    expect(functions.rows.map(x => [x.nspname, x.prosecdef])).toEqual([['public', false], ['research_private', true]])
+    expect(functions.rows.every(x => x.proconfig.some(setting => setting.startsWith('search_path=') && !setting.includes('public')))).toBe(true)
+  })
+  it('过期、撤销、跨团队的邀请码不能入组', async () => {
+    await issue('expired', { expired: true }); await issue('revoked', { revoked: true }); await issue('wrong-team')
+    for (const code of ['expired', 'revoked']) expect((await join(second, code)).rows[0].result.joined).toBe(false)
+    expect((await join(second, 'wrong-team', teamB)).rows[0].result.joined).toBe(false)
+    expect((await asUser(second, 'select * from public.team_members')).rows).toEqual([])
+  })
+  it('错误次数持久化，五次失败后锁定；过了窗口可重试', async () => {
+    for (let i = 0; i < 5; i++) expect((await join(limited, 'bad')).rows[0].result.joined).toBe(false)
+    await issue('rate-limit-valid')
+    expect((await join(limited, 'rate-limit-valid')).rows[0].result.message).toMatch(/15 分钟/)
+    await db.query("update research_private.invite_attempts set window_start=now()-interval '16 minutes' where user_id=$1", [limited])
+    expect((await join(limited, 'rate-limit-valid')).rows[0].result.joined).toBe(true)
+  })
+  it('正确码创建当前用户成员身份、记录活动；重复兑换不占名额也不改名，最后名额不能重复使用', async () => {
+    const issued = await issue('last-seat')
+    expect((await join(invitee, ' LAST-SEAT ', teamA, '研究新成员')).rows[0].result.joined).toBe(true)
+    expect((await asUser(invitee, 'select title from public.literature')).rows).toEqual([{ title: 'A组文献' }])
+    expect((await join(invitee, 'last-seat', teamA, '不应改名')).rows[0].result.joined).toBe(true)
+    expect((await db.query('select display_name from public.team_members where team_id=$1 and user_id=$2', [teamA, invitee])).rows).toEqual([{ display_name: '研究新成员' }])
+    expect((await db.query('select uses from research_private.team_invites where id=$1', [issued.rows[0].id])).rows).toEqual([{ uses: 1 }])
+    expect((await join(second, 'last-seat')).rows[0].result.joined).toBe(false)
+    expect((await asUser(invitee, "select action from public.activity_logs where user_id=$1 and action='加入了研究团队'", [invitee])).rows).toHaveLength(1)
+    expect((await asUser(userB, 'select * from public.team_members where user_id=$1', [invitee])).rows).toEqual([])
   })
 })
 describe('笔记归属与文献完整性', () => {

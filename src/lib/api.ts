@@ -39,8 +39,16 @@ export async function loadSnapshot(): Promise<Snapshot> {
     supabase.from('activity_logs').select('*').eq('team_id', teamId).order('created_at', { ascending: false }).limit(30),
   ])
   const data = { literature: checked(literature), tasks: checked(tasks), notes: checked(notes), members: checked(members), activities: checked(activities) } as Snapshot
-  if (!data.members.length) throw new Error('当前账号尚未加入此团队，请联系项目管理员添加团队成员。')
   return data
+}
+export async function joinTeam(inviteCode: string, memberName: string) {
+  if (!supabase) throw new Error('请先连接 Supabase。')
+  const { data, error } = await supabase.rpc('join_team_with_invite', { target_team: teamId, invite_code: inviteCode.trim(), member_name: memberName.trim() })
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883') throw new Error('入组功能尚未启用，请联系组长完成配置。')
+    throw new Error('暂时无法加入团队，请稍后重试或联系组长。')
+  }
+  if (!data?.joined) throw new Error(data?.message ?? '未能加入团队，请检查邀请码。')
 }
 export async function addLiterature(input: LiteratureInput, userId: string, file?: File) {
   validateLiterature(input); if (file) validateFile(file)

@@ -1,4 +1,5 @@
--- 在 schema.sql 执行后使用。先在 Authentication > Users 创建成员账号。
+-- 在 schema.sql 执行后使用。新成员可按 SUPABASE-SETUP.md 自行注册并用邀请码入组。
+-- 管理员不必预建账号；下面保留手动添加成员及可选初始任务的模板。
 -- 1. 新建团队并记录返回的 UUID（每个团队只执行一次）。
 insert into public.teams(name) values ('中合村蛋鸡产业案例研究小组') returning id;
 

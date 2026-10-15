@@ -31,7 +31,7 @@ https://你的GitHub用户名.github.io/zhonghe-research/
 
 ## 后续开启真实团队协作
 
-按 README 完成 Supabase 数据库与成员初始化后，在仓库 **Settings → Secrets and variables → Actions → Variables** 中添加三个 **Repository variables**：
+先按 [SUPABASE-SETUP.md](./SUPABASE-SETUP.md) 完成数据库、邀请码和邮箱注册设置。成员现在可以自行注册、验证邮箱、使用邀请码入组，无需逐个预建账号。然后在仓库 **Settings → Secrets and variables → Actions → Variables** 中添加三个 **Repository variables**：
 
 | 名称 | 内容 |
 | --- | --- |
@@ -39,7 +39,7 @@ https://你的GitHub用户名.github.io/zhonghe-research/
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | publishable / anon 公开密钥 |
 | `VITE_TEAM_ID` | 已创建的团队 UUID |
 
-三个值需要一起配置。工作流会在构建时读入它们。设置完成后重新 **Run workflow**，成员再用已加入团队的邮箱账号登录。
+三个值需要一起配置。工作流会在构建时读入它们。设置完成后重新 **Run workflow**，新成员即可在登录页点击注册，验证邮箱后输入邀请码。老成员可直接登录。
 
 这里使用的是公开浏览器密钥；不要设置 service_role / secret key。账号密码不需要添加到 GitHub。更改变量后必须重新构建，刷新浏览器不会修改旧构建。
 
